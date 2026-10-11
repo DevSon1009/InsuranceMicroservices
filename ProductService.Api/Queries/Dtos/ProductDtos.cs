@@ -1,0 +1,46 @@
+﻿#nullable disable
+using System.Collections.Generic;
+
+namespace ProductService.Api.Queries.Dtos
+{
+    public class ProductDto
+    {
+        public string Code { get; set; }
+        public string Name { get; set; }
+        public string Description { get; set; }
+        public string Image { get; set; }
+        public string Icon { get; set; }
+        public List<CoverDto> Covers { get; set; } = new List<CoverDto>();
+        public List<QuestionDto> Questions { get; set; } = new List<QuestionDto>();
+    }
+
+    public class CoverDto
+    {
+        public decimal SumInsured { get; set; }
+        public string Code { get; set; }
+        public string Name { get; set; }
+        public string Description { get; set; }
+    }
+
+    public abstract class QuestionDto
+    {
+        public string QuestionCode { get; set; }
+        public string Text { get; set; }
+    }
+
+    public class ChoiceQuestionDto : QuestionDto
+    {
+        public List<ChoiceDto> Choices { get; set; } = new List<ChoiceDto>();
+    }
+
+    public class NumericQuestionDto : QuestionDto
+    {
+    }
+
+    public class ChoiceDto
+    {
+        public string Code { get; set; }
+        public string Label { get; set; }
+    }
+}
+
