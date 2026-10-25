@@ -1,34 +1,44 @@
-using AuthService.Api.Commands;
-using AuthService.Services;
+﻿using AuthService.Domain;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AuthService.Controllers;
 
+[Authorize]
+[Route("api/[controller]")]
 [ApiController]
-[Route("api/User")]
 public class UserController : ControllerBase
 {
-    private readonly IUserStore userStore;
-    private readonly ITokenService tokenService;
+    private readonly Domain.AuthService authService;
 
-    public UserController(IUserStore userStore, ITokenService tokenService)
+    public UserController(Domain.AuthService authService)
     {
-        this.userStore = userStore;
-        this.tokenService = tokenService;
+        this.authService = authService;
     }
 
-    /// <summary>Đăng nhập và nhận mã JWT.</summary>
+    [AllowAnonymous]
     [HttpPost]
-    [ProducesResponseType(typeof(LoginResult), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public ActionResult<LoginResult> Login([FromBody] LoginCommand command)
+    public IActionResult Post([FromBody] AuthRequest user)
     {
-        var user = userStore.Validate(command.Login, command.Password);
-        if (user is null)
-        {
-            return Unauthorized();
-        }
+        var authResult = authService.Authenticate(user.Login, user.Password);
 
-        return Ok(tokenService.CreateToken(user));
+        if (authResult == null)
+            return BadRequest(new { message = "Username of password incorrect" });
+
+        return Ok(new
+        {
+            Token = authResult.Token,
+            UserName = authResult.Login,
+            Roles = authResult.Roles,
+            Avatar = authResult.Avatar,
+            UserType = authResult.UserType,
+            ExpiryTimeStamp = authResult.ExpiryTimeStamp
+        });
+    }
+
+    [HttpGet]
+    public IActionResult Get()
+    {
+        return Ok(authService.AgentFromLogin(HttpContext.User.Identity.Name));
     }
 }
