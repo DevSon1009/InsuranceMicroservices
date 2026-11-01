@@ -13,3 +13,6 @@
 - Task 4 (DashboardService, cổng 5035): `POST /api/Dashboard/total-sales | agents-sales | sales-trends`, đăng ký Eureka với tên `DashboardService`. Dữ liệu bán hàng hiện là dữ liệu mẫu trong bộ nhớ (`InMemorySalesRepository`), chưa lấy từ sự kiện RabbitMQ.
 - Các service Auth/Chat/Dashboard được viết theo hợp đồng mà BlazorWasmClient đang gọi, không dùng code mẫu của giảng viên.
 
+
+- Cai Marten 7.19.1 cho PaymentService; thay code mau cho PaymentService va ProductService (3 thu muc moi service).
+- Dong bo MediatR 12.4.1; bo sung PolicyService.Api/Events (PolicyCreated, PolicyTerminated) vi PaymentService can.
