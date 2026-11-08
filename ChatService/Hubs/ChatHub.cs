@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.SignalR;
 namespace ChatService.Hubs;
 
 [Authorize]
-public class ChatHub : Hub
+public class MapHub : Hub
 {
     public override async Task OnConnectedAsync()
     {

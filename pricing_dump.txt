@@ -1,0 +1,361 @@
+===== PricingService\Domain\ITariffRepository.cs 
+﻿using System.Threading.Tasks;
+
+namespace PricingService.Domain;
+
+public interface ITariffRepository
+{
+    Task<Tariff> this[string code] { get; }
+    Task<Tariff> WithCode(string code);
+
+    void Add(Tariff tariff);
+
+    Task<bool> Exists(string code);
+}===== PricingService\Domain\Tariff.cs 
+﻿using System;
+using System.Collections.Generic;
+using Newtonsoft.Json;
+
+namespace PricingService.Domain;
+
+public class Tariff
+{
+    [JsonProperty] private List<BasePremiumCalculationRule> basePremiumRules;
+
+    [JsonProperty] private List<DiscountMarkupRule> discountMarkupRules;
+
+    public Tariff(string code)
+    {
+        Id = Guid.NewGuid();
+        Code = code;
+        basePremiumRules = new List<BasePremiumCalculationRule>();
+        discountMarkupRules = new List<DiscountMarkupRule>();
+    }
+
+    public Guid Id { get; }
+    public string Code { get; }
+
+    [JsonIgnore] public BasePremiumCalculationRuleList BasePremiumRules => new(basePremiumRules);
+
+    [JsonIgnore] public DiscountMarkupRuleList DiscountMarkupRules => new(discountMarkupRules);
+
+    public Calculation CalculatePrice(Calculation calculation)
+    {
+        CalcBasePrices(calculation);
+        ApplyDiscounts(calculation);
+        UpdateTotals(calculation);
+        return calculation;
+    }
+
+
+    private void CalcBasePrices(Calculation calculation)
+    {
+        foreach (var cover in calculation.Covers.Values)
+            cover.SetPrice(BasePremiumRules.CalculateBasePriceFor(cover, calculation));
+    }
+
+    private void ApplyDiscounts(Calculation calculation)
+    {
+        DiscountMarkupRules.Apply(calculation);
+    }
+
+    private void UpdateTotals(Calculation calculation)
+    {
+        calculation.UpdateTotal();
+    }
+}===== PricingService\Domain\BasePremiumCalculationRule.cs 
+﻿using DynamicExpresso;
+using static System.String;
+
+namespace PricingService.Domain;
+
+public class BasePremiumCalculationRule
+{
+    public BasePremiumCalculationRule(string coverCode, string applyIfFormula, string basePriceFormula)
+    {
+        CoverCode = coverCode;
+        ApplyIfFormula = applyIfFormula;
+        BasePriceFormula = basePriceFormula;
+    }
+
+    public string CoverCode { get; }
+    public string ApplyIfFormula { get; }
+    public string BasePriceFormula { get; }
+
+    public bool Applies(Cover cover, Calculation calculation)
+    {
+        if (cover.Code != CoverCode)
+            return false;
+
+        if (IsNullOrEmpty(ApplyIfFormula))
+            return true;
+
+        var (paramDefinitions, values) = calculation.ToCalculationParams();
+        return (bool)new Interpreter()
+            .Parse(ApplyIfFormula, paramDefinitions.ToArray())
+            .Invoke(values.ToArray());
+    }
+
+    public decimal CalculateBasePrice(Calculation calculation)
+    {
+        var (paramDefinitions, values) = calculation.ToCalculationParams();
+
+        return (decimal)new Interpreter()
+            .Parse(BasePriceFormula, paramDefinitions.ToArray())
+            .Invoke(values.ToArray());
+    }
+}===== PricingService\Domain\BasePremiumCalculationRuleList.cs 
+﻿using System.Collections.Generic;
+using System.Linq;
+
+namespace PricingService.Domain;
+
+public class BasePremiumCalculationRuleList
+{
+    private readonly List<BasePremiumCalculationRule> rules;
+
+    public BasePremiumCalculationRuleList(List<BasePremiumCalculationRule> rules)
+    {
+        this.rules = rules;
+    }
+
+    public void AddBasePriceRule(string coverCode, string applyIfFormula, string basePriceFormula)
+    {
+        rules.Add(new BasePremiumCalculationRule(coverCode, applyIfFormula, basePriceFormula));
+    }
+
+    public decimal CalculateBasePriceFor(Cover cover, Calculation calculation)
+    {
+        return rules
+            .Where(r => r.Applies(cover, calculation))
+            .Select(r => r.CalculateBasePrice(calculation))
+            .FirstOrDefault();
+    }
+}===== PricingService\Domain\DiscountMarkupRule.cs 
+﻿using DynamicExpresso;
+using static System.String;
+using static System.Decimal;
+
+namespace PricingService.Domain;
+
+public abstract class DiscountMarkupRule
+{
+    public string ApplyIfFormula { get; protected set; }
+    public decimal ParamValue { get; protected set; }
+
+    public bool Applies(Calculation calculation)
+    {
+        if (IsNullOrEmpty(ApplyIfFormula))
+            return true;
+
+        var (paramDefinitions, values) = calculation.ToCalculationParams();
+        return (bool)new Interpreter()
+            .Parse(ApplyIfFormula, paramDefinitions.ToArray())
+            .Invoke(values.ToArray());
+    }
+
+    public abstract Calculation Apply(Calculation calculation);
+}
+
+public class PercentMarkupRule : DiscountMarkupRule
+{
+    public PercentMarkupRule(string applyIfFormula, decimal paramValue)
+    {
+        ApplyIfFormula = applyIfFormula;
+        ParamValue = paramValue;
+    }
+
+    public override Calculation Apply(Calculation calculation)
+    {
+        foreach (var cover in calculation.Covers.Values)
+        {
+            var priceAfterMarkup = Round(cover.Price * ParamValue, 2);
+            cover.SetPrice(priceAfterMarkup);
+        }
+
+        return calculation;
+    }
+}===== PricingService\Domain\DiscountMarkupRuleList.cs 
+﻿using System.Collections.Generic;
+using System.Linq;
+using PricingService.Extensions;
+
+namespace PricingService.Domain;
+
+public class DiscountMarkupRuleList
+{
+    private readonly List<DiscountMarkupRule> rules;
+
+    public DiscountMarkupRuleList(List<DiscountMarkupRule> rules)
+    {
+        this.rules = rules;
+    }
+
+    public void AddPercentMarkup(string applyIfFormula, decimal markup)
+    {
+        rules.Add(new PercentMarkupRule(applyIfFormula, markup));
+    }
+
+    public void Apply(Calculation calculation)
+    {
+        rules
+            .Where(r => r.Applies(calculation))
+            .ForEach(r => r.Apply(calculation));
+    }
+}===== PricingService\Domain\Cover.cs 
+﻿namespace PricingService.Domain;
+
+public class Cover
+{
+    public Cover(string code, decimal price)
+    {
+        Code = code;
+        Price = price;
+    }
+
+    public string Code { get; }
+    public decimal Price { get; private set; }
+
+    public void SetPrice(decimal price)
+    {
+        Price = price;
+    }
+}===== PricingService\Controllers\PricingController.cs 
+﻿using System.Threading.Tasks;
+using MediatR;
+using Microsoft.AspNetCore.Mvc;
+using PricingService.Api.Commands;
+
+namespace PricingService.Controllers;
+
+[Route("api/[controller]")]
+[ApiController]
+public class PricingController : ControllerBase
+{
+    private readonly IMediator bus;
+
+    public PricingController(IMediator bus)
+    {
+        this.bus = bus;
+    }
+
+
+    // POST api/values
+    [HttpPost]
+    public async Task<ActionResult> Post([FromBody] CalculatePriceCommand cmd)
+    {
+        var result = await bus.Send(cmd);
+        return new JsonResult(result);
+    }
+}===== PricingService\PricingService.csproj 
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DynamicExpresso.Core" Version="2.16.1" />
+    <PackageReference Include="MediatR" Version="12.4.1" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.20" />
+    <PackageReference Include="Steeltoe.Discovery.Eureka" Version="4.3.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PricingService.Api\PricingService.Api.csproj" />
+  </ItemGroup>
+
+</Project>
+===== PricingService.Api\Commands\CalculatePriceCommand.cs 
+﻿using System;
+using System.Collections.Generic;
+using FluentValidation;
+using MediatR;
+using PricingService.Api.Commands.Dto;
+
+namespace PricingService.Api.Commands;
+
+public class CalculatePriceCommand : IRequest<CalculatePriceResult>
+{
+    public string ProductCode { get; set; }
+    public DateTimeOffset PolicyFrom { get; set; }
+    public DateTimeOffset PolicyTo { get; set; }
+    public List<string> SelectedCovers { get; set; }
+    public List<QuestionAnswer> Answers { get; set; }
+}
+
+public class CalculatePriceCommandValidator : AbstractValidator<CalculatePriceCommand>
+{
+    public CalculatePriceCommandValidator()
+    {
+        RuleFor(m => m.ProductCode).NotEmpty();
+        RuleFor(m => m.SelectedCovers).NotNull();
+        RuleFor(m => m.Answers).NotNull();
+    }
+}===== PricingService.Test\Domain\TariffFactory.cs 
+﻿using PricingService.Domain;
+
+namespace PricingService.Test.Domain;
+
+internal static class TariffFactory
+{
+    internal static Tariff Travel()
+    {
+        var travel = new Tariff("TRI");
+        travel.BasePremiumRules.AddBasePriceRule("C1", null,
+            "(NUM_OF_ADULTS) * (DESTINATION == \"EUR\" ? 26.00M : 34.00M)");
+        travel.BasePremiumRules.AddBasePriceRule("C2", null, "(NUM_OF_ADULTS + NUM_OF_CHILDREN) * 26.00M");
+        travel.BasePremiumRules.AddBasePriceRule("C3", null, "(NUM_OF_ADULTS + NUM_OF_CHILDREN) * 10.00M");
+
+        travel.DiscountMarkupRules.AddPercentMarkup("DESTINATION == \"WORLD\"", 1.5M);
+
+        return travel;
+    }
+
+    internal static Tariff House()
+    {
+        var house = new Tariff("HSI");
+
+        house.BasePremiumRules.AddBasePriceRule("C1", "TYP == \"APT\"", "AREA * 1.25M");
+        house.BasePremiumRules.AddBasePriceRule("C1", "TYP == \"HOUSE\"", "AREA * 1.50M");
+
+        house.BasePremiumRules.AddBasePriceRule("C2", "TYP == \"APT\"", "AREA * 0.25M");
+        house.BasePremiumRules.AddBasePriceRule("C2", "TYP == \"HOUSE\"", "AREA * 0.45M");
+
+        house.BasePremiumRules.AddBasePriceRule("C3", null, "30M");
+        house.BasePremiumRules.AddBasePriceRule("C4", null, "50M");
+
+        house.DiscountMarkupRules.AddPercentMarkup("FLOOD == \"YES\"", 1.50M);
+        house.DiscountMarkupRules.AddPercentMarkup("NUM_OF_CLAIM > 1 ", 1.25M);
+
+        return house;
+    }
+
+    internal static Tariff Farm()
+    {
+        var farm = new Tariff("FAI");
+
+        farm.BasePremiumRules.AddBasePriceRule("C1", null, "10M");
+        farm.BasePremiumRules.AddBasePriceRule("C2", null, "20M");
+        farm.BasePremiumRules.AddBasePriceRule("C3", null, "30M");
+        farm.BasePremiumRules.AddBasePriceRule("C4", null, "40M");
+
+        farm.DiscountMarkupRules.AddPercentMarkup("FLOOD == \"YES\"", 1.50M);
+        farm.DiscountMarkupRules.AddPercentMarkup("NUM_OF_CLAIM > 2", 2.00M);
+
+        return farm;
+    }
+
+    internal static Tariff Car()
+    {
+        var car = new Tariff("CAR");
+
+        car.BasePremiumRules.AddBasePriceRule("C1", null, "100M");
+        car.DiscountMarkupRules.AddPercentMarkup("NUM_OF_CLAIM > 2", 1.50M);
+
+        return car;
+    }
+}
